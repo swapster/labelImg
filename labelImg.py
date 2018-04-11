@@ -24,6 +24,7 @@ except ImportError:
         sip.setapi('QVariant', 2)
     from PyQt4.QtGui import *
     from PyQt4.QtCore import *
+    import PyQt4.QtCore as QCore
 
 import resources
 
@@ -114,6 +115,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dirty = False
 
         # Enble auto saving if pressing next
+        self.lastAnnotationFilePath = None
         self.autoSaving = True
         self._noSelectionSlot = False
         self._beginner = True
@@ -205,6 +207,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         openAnnotation = action('&Open Annotation', self.openAnnotation,
                                 'Ctrl+Shift+O', 'openAnnotation', u'Open Annotation')
+        openLastAnnotation = action('&Open Last Annotation', self.openLastAnnotation,
+                                'Ctrl+C', 'openLastAnnotation', u'Open last saved annotation')
+        openCurrentAnnotation = action('&Open Current Annotation', self.openCurrentAnnotation,
+                                'Ctrl+Shift+C', 'openCurrentAnnotation', u'Open annotation for current file')
 
         openNextImg = action('&Next Image', self.openNextImg,
                              'd', 'next', u'Open Next')
@@ -220,6 +226,8 @@ class MainWindow(QMainWindow, WindowMixin):
         saveAs = action('&Save As', self.saveFileAs,
                         'Ctrl+Shift+S', 'save-as', u'Save labels to a different file',
                         enabled=False)
+        saveWithDefaultName = action('&Save With Default Name', self.saveWithDefaultName,
+                                'Ctrl+V', 'saveWithDefaultName', u'Save labels with name like filename', enabled=False)
         close = action('&Close', self.closeFile,
                        'Ctrl+W', 'close', u'Close current file')
         color1 = action('Box &Line Color', self.chooseColor1,
@@ -309,7 +317,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.popLabelListMenu)
 
         # Store actions for further handling.
-        self.actions = struct(save=save, saveAs=saveAs, open=open, close=close,
+        self.actions = struct(save=save, saveAs=saveAs, saveWithDefaultName=saveWithDefaultName, open=open, close=close,
                               lineColor=color1, fillColor=color2,
                               create=create, delete=delete, edit=edit, copy=copy,
                               createMode=createMode, editMode=editMode, advancedMode=advancedMode,
@@ -318,7 +326,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               fitWindow=fitWindow, fitWidth=fitWidth,
                               zoomActions=zoomActions,
                               fileMenuActions=(
-                                  open, opendir, save, saveAs, close, quit),
+                                  open, opendir, save, saveAs, saveWithDefaultName, close, quit),
                               beginner=(), advanced=(),
                               editMenu=(edit, copy, delete,
                                         None, color1, color2),
@@ -327,7 +335,7 @@ class MainWindow(QMainWindow, WindowMixin):
                                                delete, shapeLineColor, shapeFillColor),
                               onLoadActive=(
                                   close, create, createMode, editMode),
-                              onShapesPresent=(saveAs, hideAll, showAll))
+                              onShapesPresent=(saveAs, saveWithDefaultName, hideAll, showAll))
 
         self.menus = struct(
             file=self.menu('&File'),
@@ -338,7 +346,8 @@ class MainWindow(QMainWindow, WindowMixin):
             labelList=labelMenu)
 
         addActions(self.menus.file,
-                   (open, opendir, changeSavedir, openAnnotation, self.menus.recentFiles, save, saveAs, close, None, quit))
+                   (open, opendir, changeSavedir, openAnnotation, openLastAnnotation, openCurrentAnnotation,
+                    self.menus.recentFiles, save, saveAs, saveWithDefaultName, close, None, quit))
         addActions(self.menus.help, (help,))
         addActions(self.menus.view, (
             labels, advancedMode, None,
@@ -905,6 +914,12 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.mayContinue():
             self.loadFile(filename)
 
+    def atoi(self, text):
+        return int(text) if text.isdigit() else text
+
+    def natural_keys(self, text):
+        return [self.atoi(c) for c in re.split('(\d+)', text)]
+
     def scanAllImages(self, folderPath):
         extensions = ['.jpeg', '.jpg', '.png', '.bmp']
         images = []
@@ -915,7 +930,7 @@ class MainWindow(QMainWindow, WindowMixin):
                     relatviePath = os.path.join(root, file)
                     path = u(os.path.abspath(relatviePath))
                     images.append(path)
-        images.sort(key=lambda x: x.lower())
+        images.sort(key=self.natural_keys)
         return images
 
     def changeSavedir(self, _value=False):
@@ -949,6 +964,18 @@ class MainWindow(QMainWindow, WindowMixin):
             filename = str(QFileDialog.getOpenFileName(self,
                                                        '%s - Choose a xml file' % __appname__, path, filters))
             self.loadPascalXMLByFilename(filename)
+
+    def openLastAnnotation(self, _value=False):
+        if self.lastAnnotationFilePath is None:
+            return
+
+        self.loadPascalXMLByFilename(str(self.lastAnnotationFilePath))
+
+    def openCurrentAnnotation(self, _value=False):
+        if self.filePath is None:
+            return
+
+        self.loadPascalXMLByFilename(os.path.splitext(self.filePath)[0] + '.xml')
 
     def openDir(self, _value=False):
         if not self.mayContinue():
@@ -1053,11 +1080,16 @@ class MainWindow(QMainWindow, WindowMixin):
             self._saveFile(savedPath)
         else:
             self._saveFile(self.filePath if self.labelFile
-                           else self.saveFileDialog())
+                           else self.saveFileDialog() + '.xml')
 
     def saveFileAs(self, _value=False):
         assert not self.image.isNull(), "cannot save empty image"
         self._saveFile(self.saveFileDialog())
+
+    def saveWithDefaultName(self, _value=False):
+        if self.filePath is None:
+            return
+        self._saveFile(os.path.splitext(self.filePath)[0] + '.xml')
 
     def saveFileDialog(self):
         caption = '%s - Choose File' % __appname__
@@ -1078,6 +1110,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.setClean()
             self.statusBar().showMessage('Saved to  %s' % annotationFilePath)
             self.statusBar().show()
+            self.lastAnnotationFilePath = annotationFilePath
 
     def closeFile(self, _value=False):
         if not self.mayContinue():
@@ -1233,15 +1266,16 @@ def get_main_app(argv=[]):
     app = QApplication(argv)
     app.setApplicationName(__appname__)
     app.setWindowIcon(newIcon("app"))
+    app.addLibraryPath(os.path.join(os.path.dirname(QCore.__file__), "plugins"))
     win = MainWindow(argv[1] if len(argv) == 2 else None)
     win.show()
     return app, win
 
 
-def main(argv):
+def main():
     '''construct main app and run it'''
-    app, _win = get_main_app(argv)
-    return app.exec_()
+    app, _win = get_main_app(sys.argv)
+    sys.exit(app.exec_())
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv))
+    main()
